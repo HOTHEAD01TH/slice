@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>slice</title>
+<style>
+  :root {
+    --bg: #10141a; --panel: #181e27; --panel-2: #12171f; --line: #2c3644;
+    --text: #e8eef7; --muted: #9aa8bc; --accent: #8eb6ff; --ok: #3dd68c; --warn: #f0b429; --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.45 ui-sans-serif, system-ui, sans-serif; }
+  header, main { width: min(1100px, calc(100% - 32px)); margin: 0 auto; }
+  header { display: flex; justify-content: space-between; gap: 16px; align-items: flex-end; padding: 28px 0 12px; }
+  h1 { margin: 0; font-size: 32px; letter-spacing: -0.03em; }
+  h2 { margin: 0 0 4px; font-size: 18px; }
+  p { margin: 0; }
+  .kicker { color: var(--accent); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 6px; }
+  .lede, .note { color: var(--muted); max-width: 68ch; }
+  .note { font-size: 13px; margin-top: 6px; }
+  .mode { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 6px 12px; color: var(--muted); font-size: 13px; }
+  form, .col { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+  form { display: grid; grid-template-columns: 140px 1fr 1fr; gap: 10px; padding: 14px; margin: 16px 0 20px; }
+  label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 13px; }
+  label.wide { grid-column: 1 / -1; }
+  input, select, textarea, button { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+  textarea { min-height: 88px; resize: vertical; }
+  button { background: var(--accent); color: #0d1218; border: 0; font-weight: 650; cursor: pointer; }
+  button:disabled { opacity: 0.6; cursor: wait; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding-bottom: 40px; }
+  .col { padding: 14px; }
+  .stack { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+  .card { padding: 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 14px; }
+  .card h3 { margin: 0 0 4px; font-size: 16px; }
+  .meta, .sub { color: var(--muted); font-size: 13px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .tag { font-size: 12px; border-radius: 999px; padding: 2px 8px; border: 1px solid var(--line); color: var(--muted); }
+  .tag.ok { color: var(--ok); border-color: #1f6b48; }
+  .tag.warn { color: var(--warn); border-color: #6d5410; }
+  .empty { color: var(--muted); }
+  @media (max-width: 800px) { form, .cols { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <p class="kicker">company inbox</p>
+    <h1>slice</h1>
+    <p class="lede">Seeded email, tickets, and leads are scored by local Laya: queue, urgency, churn, and refund. Abstentions go to the work queue. Nothing is auto-replied.</p>
+  </div>
+  <div class="mode" id="mode" role="status">Laya not running</div>
+</header>
+<main>
+  <form id="form">
+    <label>Kind
+      <select name="kind">
+        <option value="email">email</option>
+        <option value="ticket">ticket</option>
+        <option value="lead">lead</option>
+      </select>
+    </label>
+    <label>From <input name="from" required maxlength="200" placeholder="person@example.com" /></label>
+    <label>Subject <input name="subject" required maxlength="300" placeholder="Short subject" /></label>
+    <label class="wide">Body <textarea name="body" required maxlength="20000" placeholder="What they wrote"></textarea></label>
+    <button type="submit">Ingest</button>
+  </form>
+  <div class="cols">
+    <section class="col">
+      <h2>Work queue</h2>
+      <p class="note">Humans work only this column. Pending items and abstentions wait here.</p>
+      <div id="unsure" class="stack"></div>
+    </section>
+    <section class="col">
+      <h2>Routed</h2>
+      <p class="note">Visible, not the human work queue. No reply is sent.</p>
+      <div id="routed" class="stack"></div>
+    </section>
+  </div>
+</main>
+<script>
+const routedEl = document.querySelector("#routed");
+const unsureEl = document.querySelector("#unsure");
+const modeEl = document.querySelector("#mode");
+const form = document.querySelector("#form");
+const DOWN = "Laya not running";
+
+function tag(className, text) {
+  const el = document.createElement("span");
+  el.className = "tag " + className;
+  el.textContent = text;
+  return el;
+}
+
+function num(v) {
+  return typeof v === "number" && Number.isFinite(v) ? v.toFixed(2) : null;
+}
+
+function card(item) {
+  const el = document.createElement("article");
+  el.className = "card";
+  const h = document.createElement("h3");
+  h.textContent = item.subject;
+  const meta = document.createElement("p");
+  meta.className = "meta";
+  meta.textContent = item.kind + " · " + item.from;
+  const body = document.createElement("p");
+  body.textContent = item.body;
+  const row = document.createElement("div");
+  row.className = "row";
+  if (item.status === "pending") row.append(tag("warn", "not scored"));
+  else if (item.status === "routed") row.append(tag("ok", item.queue || "routed"));
+  else row.append(tag("warn", "abstain"));
+  if (item.urgency && item.urgency.level) row.append(tag("", "urgency " + item.urgency.level));
+  else if (item.status === "unsure") row.append(tag("", "urgency abstain"));
+  if (item.churn && num(item.churn.value) !== null) row.append(tag("", "churn " + num(item.churn.value)));
+  else if (item.status === "unsure") row.append(tag("", "churn abstain"));
+  if (item.refund && num(item.refund.value) !== null) row.append(tag("", "refund " + num(item.refund.value)));
+  else if (item.status === "unsure") row.append(tag("", "refund abstain"));
+  if (item.model) row.append(tag("", item.model));
+  el.append(h, meta, body, row);
+  return el;
+}
+
+function fill(el, list, empty) {
+  el.replaceChildren();
+  if (!list.length) {
+    const p = document.createElement("p");
+    p.className = "empty";
+    p.textContent = empty;
+    el.append(p);
+    return;
+  }
+  for (const item of list) el.append(card(item));
+}
+
+async function loadItems() {
+  const res = await fetch("/api/items");
+  const data = await res.json();
+  const items = data.items || [];
+  fill(unsureEl, items.filter((i) => i.status !== "routed"), "Work queue is empty.");
+  fill(routedEl, items.filter((i) => i.status === "routed"), "Nothing routed.");
+}
+
+async function scoreAll() {
+  const health = await fetch("/api/health");
+  if (!health.ok) {
+    modeEl.textContent = DOWN;
+    await loadItems();
+    return;
+  }
+  modeEl.textContent = "loading model";
+  const res = await fetch("/api/score", { method: "POST" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    modeEl.textContent = DOWN;
+    await loadItems();
+    return;
+  }
+  modeEl.textContent = "laya";
+  const items = data.items || [];
+  fill(unsureEl, items.filter((i) => i.status !== "routed"), "Work queue is empty.");
+  fill(routedEl, items.filter((i) => i.status === "routed"), "Nothing routed.");
+}
+
+form.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const fd = new FormData(form);
+  const button = form.querySelector("button");
+  button.disabled = true;
+  try {
+    const res = await fetch("/api/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind: fd.get("kind"),
+        from: fd.get("from"),
+        subject: fd.get("subject"),
+        body: fd.get("body"),
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      modeEl.textContent = data.error === DOWN || res.status === 503 ? DOWN : (data.error || DOWN);
+      await loadItems();
+      return;
+    }
+    form.reset();
+    modeEl.textContent = "laya";
+    await loadItems();
+  } catch {
+    modeEl.textContent = DOWN;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+scoreAll().catch(() => { modeEl.textContent = DOWN; });
+</script>
+</body>
+</html>
